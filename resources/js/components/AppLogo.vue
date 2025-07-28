@@ -10,3 +10,4 @@ import AppLogoIcon from '@/components/AppLogoIcon.vue';
         <span class="mb-0.5 truncate leading-tight font-semibold text-[#00b956]">Мегафон ЧАТ</span>
     </div>
 </template>
+
