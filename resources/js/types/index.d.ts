@@ -27,6 +27,7 @@ export type AppPageProps<T extends Record<string, unknown> = Record<string, unkn
 
 export interface Message {
     id: number;
+    uuid: string;
     chat_id: number;
     sender_id: number;
     sender_type: 'operator' | 'client';

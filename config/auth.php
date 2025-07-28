@@ -43,6 +43,10 @@ return [
         'operator' => [
             'driver' => 'session',
             'provider' => 'operators',
+        ],
+        'client' => [
+            'driver' => 'session',
+            'provider' => 'clients',
         ]
     ],
 
@@ -72,6 +76,10 @@ return [
             'driver' => 'eloquent',
             'model' => App\Models\Operator::class,
         ],
+        'clients' => [
+            'driver' => 'eloquent',
+            'model' => App\Models\Client::class,
+        ]
         // 'users' => [
         //     'driver' => 'database',
         //     'table' => 'users',

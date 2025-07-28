@@ -25,7 +25,7 @@ return new class extends Migration
             $table->unsignedBigInteger('sender_id');
             $table->enum('sender_type', ['client', 'operator']);
             $table->json('data')->nullable(); // Для дополнительной информации, например, ID сообщения
-            $table->timestamp('created_at');
+            $table->timestamps();
         });
     }
 
