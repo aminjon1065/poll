@@ -23,7 +23,7 @@ import { Headset, PersonStanding } from 'lucide-vue-next';
                         </Button>
                     </Link>
                     <Separator orientation="vertical" />
-                    <Link :href="route('home')" method="post">
+                    <Link :href="route('chat.start')" method="post">
                         <Button variant="ghost">
                             <PersonStanding />
                             Я Клиент

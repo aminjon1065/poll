@@ -1,12 +1,20 @@
 <script setup lang="ts">
-
-import ClientLayout from '@/layouts/ClientLayout.vue';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import ChatMessage from '@/components/ChatMessage.vue';
 import { Avatar } from '@/components/ui/avatar';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-</script>
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import ClientLayout from '@/layouts/ClientLayout.vue';
+import { Chat, Message } from '@/types';
+import { useForm } from '@inertiajs/vue3';
+import { Send } from 'lucide-vue-next';
+import { ref } from 'vue';
 
+const props = defineProps<{ chat: Chat }>();
+const messages = ref<Message[]>(props.chat.messages);
+const form = useForm({ content: '' });
+</script>
 <template>
     <ClientLayout>
         <div class="fixed right-4 bottom-4 z-50">
@@ -19,7 +27,7 @@ import { Button } from '@/components/ui/button';
                         </Avatar>
                         <div>
                             <CardTitle class="text-lg">Чат поддержки</CardTitle>
-                            <p class="text-sm text-gray-500 italic">Оператор печатает...</p>
+                            <p class="text-sm text-gray-500 italic">Чем вам помочь?</p>
                         </div>
                     </div>
                 </CardHeader>
@@ -32,7 +40,7 @@ import { Button } from '@/components/ui/button';
                 </CardContent>
                 <CardFooter class="p-4">
                     <form class="flex w-full items-center space-x-2">
-                        <Input v-model="form.content" placeholder="Напишите сообщение..." @input="handleTyping" />
+                        <Input v-model="form.content" placeholder="Напишите сообщение..." />
                         <Button type="submit" size="icon">
                             <Send class="h-5 w-5" />
                         </Button>
@@ -43,6 +51,4 @@ import { Button } from '@/components/ui/button';
     </ClientLayout>
 </template>
 
-<style scoped>
-
-</style>
+<style scoped></style>

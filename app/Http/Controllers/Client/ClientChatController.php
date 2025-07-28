@@ -9,7 +9,8 @@ use App\Models\Operator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
-use Str;
+use Illuminate\Support\Str;
+use Inertia\Inertia;
 
 class ClientChatController extends Controller
 {
@@ -35,13 +36,30 @@ class ClientChatController extends Controller
                     'client_id' => $client->id,
                     'operator_id' => $operator?->id,
                     'status' => $operator ? self::STATUS_ACTIVE : self::STATUS_PENDING,
-                    'accepted_at'=> $operator ? now() : null,
+                    'accepted_at' => $operator ? now() : null,
                 ]);
             });
         }
         $this->setClientSession($request, $client, $chat);
         return redirect()->route('chat.show', ['chat' => $chat->id]);
     }
+
+    /**
+     * Отображение чата клиента.
+     */
+    public function show(Chat $chat, Request $request)
+    {
+        $clientId = session('client_id') ?? $request->cookie('client_id');
+
+        abort_if(!$clientId || $chat->client_id !== (int)$clientId, 403, 'Unauth');
+
+        $this->setClientSession($request, Client::find($clientId), $chat);
+
+        return Inertia::render('client/Chat', [
+            'chat' => $chat->load('messages'),
+        ]);
+    }
+
 
     private function getOrCreateClient(Request $request): Client
     {
@@ -80,5 +98,4 @@ class ClientChatController extends Controller
             ->get()
             ->first(fn($operator) => $operator->active_chats_count < $operator->max_chats);
     }
-
 }

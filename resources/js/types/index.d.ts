@@ -25,6 +25,31 @@ export type AppPageProps<T extends Record<string, unknown> = Record<string, unkn
     sidebarOpen: boolean;
 };
 
+export interface Message {
+    id: number;
+    chat_id: number;
+    sender_id: number;
+    sender_type: 'operator' | 'client';
+    status: 'sent' | 'delivered' | 'read';
+    is_edited: boolean;
+    content: string;
+    edited_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface Chat {
+    id: number;
+    client_id: number;
+    client: Client | null;
+    operator_id: number | null;
+    operator: Operator | null;
+    messages: Message[];
+    status: 'pending' | 'active' | 'closed';
+    created_at: string;
+    updated_at: string;
+}
+
 export interface User {
     id: number;
     name: string;
