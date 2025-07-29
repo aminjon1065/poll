@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import OperatorLayout from '@/layouts/OperatorLayout.vue';
 import axios from '@/lib/axios';
 import type { Chat, Message } from '@/types';
@@ -9,7 +10,6 @@ import { ru } from 'date-fns/locale';
 import { Check, CheckCheck, Clock, Send, X } from 'lucide-vue-next';
 import { v4 as uuidv4 } from 'uuid';
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 const props = defineProps<{
     chat: Chat;
@@ -208,88 +208,90 @@ onUnmounted(() => {
 
 <template>
     <OperatorLayout :chats="props.chats">
-        <div class="flex h-full flex-col bg-gray-50 p-4 relative">
-            <div class="flex items-center justify-between border-b bg-white p-4 shadow-sm">
+        <div class="relative flex h-full flex-col p-4">
+            <div class="flex items-center justify-between border-b p-4 shadow-sm">
                 <h2 class="text-lg font-bold text-gray-800">Чат с {{ props.chat.client.name || 'Аноним' }}</h2>
-                <button
-                    v-if="!isClosed"
-                    @click="closeChat"
-                    class="rounded-full bg-red-600 p-2 text-white transition-colors hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:outline-none"
-                    title="Закрыть чат"
-                >
+                <Button v-if="!isClosed" @click="closeChat" variant="destructive" title="Закрыть чат">
                     <X class="h-5 w-5" />
-                </button>
+                </Button>
             </div>
 
-            <ScrollArea class="flex-1 space-y-3 overflow-y-auto p-4" ref="scrollAreaRef">
-                <div v-for="message in messages" :key="message.id" class="animate-slide-in">
-                    <div :class="[message.sender_type === 'operator' ? 'flex justify-end' : 'flex justify-start', 'group mb-2']">
-                        <div
-                            :class="[
-                                message.sender_type === 'operator' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800',
-                                'max-w-[70%] rounded-lg p-3 shadow-sm',
-                                message.status === 'sent' ? 'opacity-70' : '',
-                            ]"
-                        >
-                            <div v-if="editingMessageId === message.id && message.sender_type === 'operator'" class="animate-fade-in space-y-2">
-                                <input
-                                    v-model="editedContent"
-                                    type="text"
-                                    class="w-full rounded-md border border-gray-300 p-2 text-gray-800 focus:border-blue-500 focus:ring-blue-500"
-                                    @keydown.enter.prevent="saveEdit(message.id, editedContent)"
-                                />
-                                <div class="flex gap-2">
-                                    <button
-                                        @click="saveEdit(message.id, editedContent)"
-                                        class="rounded-md bg-blue-600 px-3 py-1 text-sm text-white transition-colors hover:bg-blue-700"
-                                    >
-                                        Сохранить
-                                    </button>
-                                    <button
-                                        @click="cancelEdit"
-                                        class="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-800 transition-colors hover:bg-gray-100"
-                                    >
-                                        Отмена
-                                    </button>
-                                </div>
-                            </div>
-                            <div v-else>
-                                <p class="break-words">{{ message.content }}</p>
-                                <div class="mt-1 flex items-center gap-1 text-xs opacity-80" v-if="message.sender_type === 'operator'">
-                                    <span v-if="message.status === 'sent'">
-                                        <Clock class="h-3 w-3" />
-                                    </span>
-                                    <span v-else-if="message.status === 'delivered'">
-                                        <Check class="h-3 w-3" />
-                                    </span>
-                                    <span v-else-if="message.status === 'read'">
-                                        <CheckCheck class="h-3 w-3" />
-                                    </span>
-                                    <span>
-                                        {{
-                                            formatDistanceToNow(new Date(message.created_at), {
-                                                addSuffix: true,
-                                                locale: ru,
-                                            })
-                                        }}
-                                        <span v-if="message.is_edited" class="italic"> (ред.)</span>
-                                    </span>
-                                </div>
-                                <button
-                                    v-if="message.sender_type === 'operator' && editingMessageId !== message.id && !isClosed"
-                                    @click="startEditing(message)"
-                                    class="mt-1 hidden text-xs text-blue-200 transition-colors group-hover:block hover:text-blue-100"
+            <ScrollArea class="flex h-screen" ref="scrollAreaRef">
+                <div class="flex flex-1 flex-col gap-2 p-4 pt-0">
+                    <TransitionGroup name="list" appear>
+                        <div v-for="message in messages" :key="message.id" class="animate-slide-in">
+                            <div :class="[message.sender_type === 'operator' ? 'flex justify-end' : 'flex justify-start', 'group mb-2']">
+                                <div
+                                    :class="[
+                                        message.sender_type === 'operator' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800',
+                                        'max-w-[70%] rounded-lg p-3 shadow-sm',
+                                        message.status === 'sent' ? 'opacity-70' : '',
+                                    ]"
                                 >
-                                    Редактировать
-                                </button>
+                                    <div
+                                        v-if="editingMessageId === message.id && message.sender_type === 'operator'"
+                                        class="animate-fade-in space-y-2"
+                                    >
+                                        <input
+                                            v-model="editedContent"
+                                            type="text"
+                                            class="w-full rounded-md border border-gray-300 p-2 text-gray-800 focus:border-blue-500 focus:ring-blue-500"
+                                            @keydown.enter.prevent="saveEdit(message.id, editedContent)"
+                                        />
+                                        <div class="flex gap-2">
+                                            <button
+                                                @click="saveEdit(message.id, editedContent)"
+                                                class="rounded-md bg-blue-600 px-3 py-1 text-sm text-white transition-colors hover:bg-blue-700"
+                                            >
+                                                Сохранить
+                                            </button>
+                                            <button
+                                                @click="cancelEdit"
+                                                class="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-800 transition-colors hover:bg-gray-100"
+                                            >
+                                                Отмена
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div v-else>
+                                        <p class="break-words">{{ message.content }}</p>
+                                        <div class="mt-1 flex items-center gap-1 text-xs opacity-80" v-if="message.sender_type === 'operator'">
+                                            <span v-if="message.status === 'sent'">
+                                                <Clock class="h-3 w-3" />
+                                            </span>
+                                            <span v-else-if="message.status === 'delivered'">
+                                                <Check class="h-3 w-3" />
+                                            </span>
+                                            <span v-else-if="message.status === 'read'">
+                                                <CheckCheck class="h-3 w-3" />
+                                            </span>
+                                            <span>
+                                                {{
+                                                    formatDistanceToNow(new Date(message.created_at), {
+                                                        addSuffix: true,
+                                                        locale: ru,
+                                                    })
+                                                }}
+                                                <span v-if="message.is_edited" class="italic"> (ред.)</span>
+                                            </span>
+                                        </div>
+                                        <button
+                                            v-if="message.sender_type === 'operator' && editingMessageId !== message.id && !isClosed"
+                                            @click="startEditing(message)"
+                                            class="mt-1 hidden text-xs text-blue-200 transition-colors group-hover:block hover:text-blue-100"
+                                        >
+                                            Редактировать
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    </TransitionGroup>
                 </div>
                 <div v-if="isClosed" class="text-sm text-gray-500 italic">Чат завершён</div>
             </ScrollArea>
 
-            <div class="p-4 shadow-sm sticky bottom-0">
+            <div class="sticky bottom-0 p-4 shadow-sm">
                 <div v-if="isTyping && !isClosed" class="flex items-center gap-1 text-sm text-gray-500">
                     Клиент печатает
                     <span class="typing-dot">.</span>
