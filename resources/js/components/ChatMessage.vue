@@ -66,7 +66,7 @@ const cancelEdit = () => {
             </div>
             <div v-else>
                 <p class="break-words">{{ message.content }}</p>
-                <div class="mt-1 flex items-center gap-1 text-xs text-gray-600">
+                <div class="mt-1 flex items-center gap-1 text-xs text-gray-600" v-if="message.sender_type === 'client'">
                     <span v-if="message.status === 'sent'">
                         <Clock class="h-3 w-3" />
                         {{ statusText }}

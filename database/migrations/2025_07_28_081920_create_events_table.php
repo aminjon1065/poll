@@ -20,7 +20,8 @@ return new class extends Migration
                 'message_read',
                 'typing_start',
                 'typing_end',
-                'message_edited'
+                'message_edited',
+                'chat_closed'
             ]);
             $table->unsignedBigInteger('sender_id');
             $table->enum('sender_type', ['client', 'operator']);

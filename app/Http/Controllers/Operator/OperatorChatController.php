@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Operator;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessChatQueueJob;
 use App\Models\Chat;
 use App\Models\Event;
 use App\Models\Message;
@@ -25,10 +26,54 @@ class OperatorChatController extends Controller
 
     public function dashboard(): Response
     {
+        $operator = Auth::guard('operator')->user();
+        $chats = Chat::where('operator_id', $operator->id)
+            ->where('status', 'active')
+            ->with('messages')
+            ->with('client')
+            ->get();
 
         return Inertia::render('operator/Dashboard', [
-            'auth' => Auth::guard('operator')->user(),
+            'auth' => $operator,
+            'chats' => $chats,
         ]);
+    }
+
+    public function pollChats(Request $request)
+    {
+        $operatorId = Auth::guard('operator')->id();
+        $lastEventId = $request->query('last_event_id', 0);
+
+        $timeout = 30;
+        $startTime = time();
+
+        while (time() - $startTime < $timeout) {
+            $events = Event::where('sender_id', $operatorId)
+                ->where('sender_type', 'operator')
+                ->where('id', '>', $lastEventId)
+                ->where('event_type', 'chat_assigned')
+                ->get();
+
+            if ($events->isNotEmpty()) {
+                $chats = Chat::where('operator_id', $operatorId)
+                    ->where('status', 'active')
+                    ->with('messages')
+                    ->with('client')
+                    ->get();
+
+                return response()->json([
+                    'chats' => $chats,
+                    'last_event_id' => $events->max('id'),
+                ], 200);
+            }
+
+            usleep(500000);
+        }
+
+        return response()->json([
+            'chats' => [],
+            'last_event_id' => $lastEventId,
+        ], 200);
     }
 
     public function show($chat_id): Response
@@ -41,12 +86,58 @@ class OperatorChatController extends Controller
         return Inertia::render('operator/Chat', [
             'chat' => $chat,
             'auth' => Auth::guard('operator')->user(),
+            'chats' => Chat::where('operator_id', Auth::guard('operator')->id())
+                ->where('status', 'active')
+                ->with('messages')
+                ->with('client')
+                ->get(),
         ]);
+    }
+
+    public function closeChat(Request $request, $chat_id)
+    {
+        Log::info('OperatorChatController::closeChat called', [
+            'chat_id' => $chat_id,
+            'operator_id' => Auth::id(),
+        ]);
+
+        $chat = Chat::findOrFail($chat_id);
+        if ($chat->operator_id !== Auth::id()) {
+            return response()->json(['error' => 'Нет доступа к этому чату'], 403);
+        }
+
+        if ($chat->status !== 'active') {
+            return response()->json(['error' => 'Чат уже закрыт или не активен'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            $chat->update([
+                'status' => 'closed',
+                'closed_at' => now(),
+            ]);
+
+            Event::create([
+                'chat_id' => $chat_id,
+                'event_type' => 'chat_closed',
+                'sender_id' => Auth::id(),
+                'sender_type' => 'operator',
+                'data' => [],
+            ]);
+
+            ProcessChatQueueJob::dispatch();
+
+            DB::commit();
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to close chat', ['error' => $e->getMessage()]);
+            return response()->json(['error' => 'Не удалось закрыть чат'], 500);
+        }
     }
 
     public function sendMessage(Request $request, $chat_id)
     {
-        // Проверяем, что в запросе есть текст сообщения
         $request->validate([
             'content' => 'required|string|max:1000',
             'uuid' => 'nullable|string|uuid',
@@ -62,12 +153,10 @@ class OperatorChatController extends Controller
             );
             return response()->json(['message' => $message], 200);
         } catch (\Exception $e) {
-            // Приводим код ошибки к числу, на случай если он строка
-            $statusCode = is_numeric($e->getCode()) ? (int) $e->getCode() : 500;
+            $statusCode = is_numeric($e->getCode()) ? (int)$e->getCode() : 500;
             return response()->json(['error' => $e->getMessage()], $statusCode);
         }
     }
-
 
     public function pollMessages(Request $request, $chat_id)
     {
@@ -83,7 +172,7 @@ class OperatorChatController extends Controller
         while (time() - $startTime < $timeout) {
             $events = Event::where('chat_id', $chat_id)
                 ->where('id', '>', $lastEventId)
-                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited'])
+                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited', 'chat_closed', 'client_name_updated'])
                 ->where('sender_type', 'client')
                 ->get();
 
@@ -102,18 +191,35 @@ class OperatorChatController extends Controller
                 ];
             });
 
+            $clientName = null;
+            $nameUpdateEvent = $events->where('event_type', 'client_name_updated')->last();
+            if ($nameUpdateEvent) {
+                $clientName = $nameUpdateEvent->data['name'] ?? null;
+            }
+
             if ($events->isNotEmpty()) {
+                $chatClosed = $events->where('event_type', 'chat_closed')->isNotEmpty();
                 return response()->json([
                     'messages' => $messages,
                     'typing_events' => $typingEvents,
                     'last_event_id' => $events->max('id'),
+                    'chat_status' => $chat->refresh()->status,
+                    'chat_closed' => $chatClosed,
+                    'client_name' => $clientName,
                 ], 200);
             }
 
             usleep(500000);
         }
 
-        return response()->json(['messages' => [], 'typing_events' => [], 'last_event_id' => $lastEventId], 200);
+        return response()->json([
+            'messages' => [],
+            'typing_events' => [],
+            'last_event_id' => $lastEventId,
+            'chat_status' => $chat->status,
+            'chat_closed' => false,
+            'client_name' => null,
+        ], 200);
     }
 
     public function sendTypingEvent(Request $request, $chat_id)
@@ -204,7 +310,7 @@ class OperatorChatController extends Controller
             );
             return response()->json(['message' => $message], 200);
         } catch (\Exception $e) {
-            $statusCode = is_numeric($e->getCode()) ? (int) $e->getCode() : 500;
+            $statusCode = is_numeric($e->getCode()) ? (int)$e->getCode() : 500;
             return response()->json(['error' => $e->getMessage()], $statusCode);
         }
     }

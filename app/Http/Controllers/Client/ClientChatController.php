@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Client;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessChatQueueJob;
 use App\Models\Chat;
 use App\Models\Client;
 use App\Models\Event;
@@ -75,7 +76,7 @@ class ClientChatController extends Controller
                 'name' => $request->input('name', 'Анонимный'),
                 'session_id' => Str::uuid()->toString(),
             ]);
-            Cookie::queue('client_id', (string)$client->id, 60 * 24 * 30); // 30 дней
+            Cookie::queue('client_id', (string)$client->id, 60 * 24 * 30);
         }
         return tap($client)->update(['last_active_at' => now()]);
     }
@@ -97,6 +98,41 @@ class ClientChatController extends Controller
             ->first(fn($operator) => $operator->active_chats_count < $operator->max_chats);
     }
 
+    public function updateName(Request $request, $chat_id)
+    {
+        Log::info('ClientChatController::updateName called', [
+            'chat_id' => $chat_id,
+            'client_id' => session('client_id') ?? $request->cookie('client_id'),
+            'name' => $request->input('name'),
+        ]);
+
+        $client = $this->getOrCreateClient($request);
+        if (!$client->id) {
+            return response()->json(['error' => 'Клиент не авторизован'], 403);
+        }
+
+        $chat = Chat::findOrFail($chat_id);
+        if ($chat->client_id !== (int)$client->id) {
+            return response()->json(['error' => 'Нет доступа к этому чату'], 403);
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255|min:2',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $client = Client::findOrFail($client->id);
+            $client->update(['name' => $request->input('name')]);
+            DB::commit();
+            return response()->json(['success' => true, 'name' => $client->name]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to update client name', ['error' => $e->getMessage()]);
+            return response()->json(['error' => 'Не удалось обновить имя'], 500);
+        }
+    }
+
     public function sendMessage(Request $request, $chat_id)
     {
         Log::info('ClientChatController::sendMessage called', [
@@ -109,6 +145,11 @@ class ClientChatController extends Controller
         $clientId = session('client_id') ?? $request->cookie('client_id');
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
+        }
+
+        $chat = Chat::findOrFail($chat_id);
+        if ($chat->status !== self::STATUS_ACTIVE) {
+            return response()->json(['error' => 'Чат не активен'], 400);
         }
 
         $request->validate([
@@ -131,7 +172,6 @@ class ClientChatController extends Controller
         }
     }
 
-
     public function pollMessages(Request $request, $chat_id)
     {
         $clientId = session('client_id') ?? $request->cookie('client_id');
@@ -151,7 +191,7 @@ class ClientChatController extends Controller
         while (time() - $startTime < $timeout) {
             $events = Event::where('chat_id', $chat_id)
                 ->where('id', '>', $lastEventId)
-                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited'])
+                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited', 'chat_assigned', 'chat_closed'])
                 ->where('sender_type', 'operator')
                 ->get();
 
@@ -175,15 +215,20 @@ class ClientChatController extends Controller
                     'messages' => $messages,
                     'typing_events' => $typingEvents,
                     'last_event_id' => $events->max('id'),
+                    'chat_status' => $chat->refresh()->status,
                 ], 200);
             }
 
             usleep(500000);
         }
 
-        return response()->json(['messages' => [], 'typing_events' => [], 'last_event_id' => $lastEventId], 200);
+        return response()->json([
+            'messages' => [],
+            'typing_events' => [],
+            'last_event_id' => $lastEventId,
+            'chat_status' => $chat->status,
+        ], 200);
     }
-
 
     public function sendTypingEvent(Request $request, $chat_id)
     {
@@ -205,6 +250,10 @@ class ClientChatController extends Controller
         $chat = Chat::findOrFail($chat_id);
         if ($chat->client_id !== (int)$clientId) {
             return response()->json(['error' => 'Нет доступа к этому чату'], 403);
+        }
+
+        if ($chat->status !== self::STATUS_ACTIVE) {
+            return response()->json(['error' => 'Чат не активен'], 400);
         }
 
         Event::create([
@@ -301,8 +350,55 @@ class ClientChatController extends Controller
             );
             return response()->json(['message' => $message], 200);
         } catch (\Exception $e) {
-            $statusCode = is_numeric($e->getCode()) ? (int) $e->getCode() : 500;
+            $statusCode = is_numeric($e->getCode()) ? (int)$e->getCode() : 500;
             return response()->json(['error' => $e->getMessage()], $statusCode);
+        }
+    }
+
+    public function closeChat(Request $request, $chat_id)
+    {
+        Log::info('ClientChatController::closeChat called', [
+            'chat_id' => $chat_id,
+            'client_id' => session('client_id') ?? $request->cookie('client_id'),
+        ]);
+
+        $clientId = session('client_id') ?? $request->cookie('client_id');
+        if (!$clientId) {
+            return response()->json(['error' => 'Клиент не авторизован'], 403);
+        }
+
+        $chat = Chat::findOrFail($chat_id);
+        if ($chat->client_id !== (int)$clientId) {
+            return response()->json(['error' => 'Нет доступа к этому чату'], 403);
+        }
+
+        if ($chat->status !== self::STATUS_ACTIVE) {
+            return response()->json(['error' => 'Чат уже закрыт или не активен'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            $chat->update([
+                'status' => self::STATUS_CLOSED,
+                'closed_at' => now(),
+            ]);
+
+            Event::create([
+                'chat_id' => $chat_id,
+                'event_type' => 'chat_closed',
+                'sender_id' => (int)$clientId,
+                'sender_type' => 'client',
+                'data' => [],
+            ]);
+
+            ProcessChatQueueJob::dispatch();
+
+            DB::commit();
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to close chat', ['error' => $e->getMessage()]);
+            return response()->json(['error' => 'Не удалось закрыть чат'], 500);
         }
     }
 }
