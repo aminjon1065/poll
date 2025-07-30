@@ -20,7 +20,7 @@ const submit = () => {
 </script>
 
 <template>
-    <AuthBase title="Log in to your account" description="Enter your email and password below to log in">
+    <AuthBase title="Войдите в ваш аккаунт" description="Введите логин и пароль для входа">
         <Head title="Log in" />
         <form @submit.prevent="submit" class="flex flex-col gap-6">
             <div class="grid gap-6">
@@ -38,7 +38,6 @@ const submit = () => {
                     />
                     <InputError :message="form.errors.login" />
                 </div>
-
                 <div class="grid gap-2">
                     <div class="flex items-center justify-between">
                         <Label for="password">Пароль</Label>
@@ -54,7 +53,7 @@ const submit = () => {
                     />
                     <InputError :message="form.errors.password" />
                 </div>
-                <Button type="submit" class="mt-4 w-full" :tabindex="4" :disabled="form.processing">
+                <Button type="submit" class="mt-4 w-full bg-green-500 hover:bg-green-600" :tabindex="4" :disabled="form.processing">
                     <LoaderCircle v-if="form.processing" class="h-4 w-4 animate-spin" />
                     Войти
                 </Button>
