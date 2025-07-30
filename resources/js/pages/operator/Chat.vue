@@ -106,7 +106,6 @@ const sendTypingEvent = async (typing: boolean) => {
     if (isClosed.value) return;
     try {
         await axios.post(route('operator.chat.typing', props.chat.id), { typing });
-        console.log(`Sent typing event: ${typing ? 'typing_start' : 'typing_end'}`); // Логирование
     } catch (error) {
         console.error('Ошибка отправки события печатает:', error);
     }
