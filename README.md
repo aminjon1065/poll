@@ -64,6 +64,6 @@ DevOps-администрирования.
 [тык](https://techdev.tj/) - [тык](https://techdev.tj/) - [тык](https://techdev.tj/) -[тык](https://techdev.tj/)
 
 вот логин: admin-operator\
-вот пароль: password\
+вот пароль: password
 
 
