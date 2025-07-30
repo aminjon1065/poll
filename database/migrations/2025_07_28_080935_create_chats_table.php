@@ -16,6 +16,8 @@ return new class extends Migration
             $table->foreignId('client_id')->constrained()->onDelete('cascade');
             $table->foreignId('operator_id')->nullable()->constrained()->onDelete('set null');
             $table->enum('status', ['pending', 'active', 'closed'])->default('pending');
+            $table->timestamp('accepted_at')->nullable();
+            $table->timestamp('closed_at')->nullable();
             $table->timestamps();
         });
     }

@@ -8,7 +8,6 @@ use App\Models\Message;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use function Psy\debug;
 
 class MessageService
 {
@@ -20,43 +19,42 @@ class MessageService
             'sender_type' => $sender_type,
             'content' => $content,
             'uuid' => $uuid,
-
         ]);
 
-        // Находим чат
         $chat = Chat::findOrFail($chat_id);
-
-        // Проверяем, что чат активен
         if ($chat->status !== 'active') {
             throw new \Exception('Чат не активен', 400);
         }
 
-        // Проверяем, что оператор имеет доступ к чату
         if ($sender_type === 'operator' && $chat->operator_id !== $sender_id) {
             throw new \Exception('Нет доступа к этому чату', 403);
         }
 
-        // Создаём сообщение в транзакции
         DB::beginTransaction();
         try {
-            $message = Message::create([
-                'chat_id' => $chat_id,
-                'sender_id' => $sender_id,
-                'sender_type' => $sender_type,
-                'content' => $content,
-                'status' => 'sent',
-                'uuid' => $uuid ?? Str::uuid()->toString(),
-                ]);
+            $message = Message::firstOrCreate(
+                ['uuid' => $uuid],
+                [
+                    'chat_id' => $chat_id,
+                    'sender_id' => $sender_id,
+                    'sender_type' => $sender_type,
+                    'content' => $content,
+                    'status' => 'sent',
+                    'uuid' => $uuid ?? Str::uuid()->toString(),
+                    'retry_count' => 0,
+                ]
+            );
 
-            // Создаём событие message_sent
-            Event::create([
-                'chat_id' => $chat_id,
-                'event_type' => 'message_sent',
-                'sender_id' => $sender_id,
-                'sender_type' => $sender_type,
-                'data' => ['message_id' => $message->id],
-                'uuid' => $uuid ?? Str::uuid()->toString(),
-            ]);
+            if ($message->wasRecentlyCreated) {
+                Event::create([
+                    'chat_id' => $chat_id,
+                    'event_type' => 'message_sent',
+                    'sender_id' => $sender_id,
+                    'sender_type' => $sender_type,
+                    'data' => ['message_id' => $message->id],
+                    'uuid' => $uuid ?? Str::uuid()->toString(),
+                ]);
+            }
 
             DB::commit();
             return $message;
@@ -65,6 +63,7 @@ class MessageService
             throw $e;
         }
     }
+
     public function editMessage($message_id, $sender_id, $sender_type, $content)
     {
         Log::info('MessageService::editMessage called', [
@@ -91,7 +90,7 @@ class MessageService
                 'content' => $content,
                 'updated_at' => now(),
                 'is_edited' => true,
-                'edited_at'=> now(),
+                'edited_at' => now(),
             ]);
 
             Event::create([
@@ -120,7 +119,7 @@ class MessageService
 
         $message = Message::findOrFail($message_id);
         if ($message->status !== 'sent') {
-            return $message; // Уже доставлено или прочитано
+            return $message;
         }
 
         $chat = Chat::findOrFail($message->chat_id);

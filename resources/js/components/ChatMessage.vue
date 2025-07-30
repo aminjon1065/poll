@@ -48,38 +48,53 @@ const cancelEdit = () => {
 </script>
 
 <template>
-    <div :class="message.sender_type === 'client' ? 'flex justify-end' : 'flex justify-start'" class="group">
+    <div :class="props.message.sender_type === 'client' ? 'flex justify-end' : 'flex justify-start'" class="group">
         <div
             :class="[
-                message.sender_type === 'client' ? 'bg-blue-200' : 'bg-gray-200',
+                props.message.sender_type === 'client' ? 'bg-blue-200' : 'bg-gray-200',
                 'max-w-[70%] rounded-lg p-3 shadow-sm',
-                message.status === 'sent' ? 'opacity-70' : '',
-                'animate-slide-in'
+                props.message.status === 'sent' ? 'opacity-70' : '',
             ]"
         >
-            <div v-if="isEditing && isOwnMessage" class="space-y-2 animate-fade-in">
-                <Input v-model="editedContent" class="rounded-md border-gray-300 text-gray-800 focus:border-blue-500 focus:ring-blue-500" />
+            <div v-if="isEditing && isOwnMessage" class="space-y-2">
+                <Input
+                    v-model="editedContent"
+                    class="rounded-md border-gray-300 text-gray-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                />
                 <div class="flex gap-2">
-                    <Button @click="saveEdit" size="sm" class="bg-blue-600 hover:bg-blue-700 text-white">Сохранить</Button>
-                    <Button @click="cancelEdit" size="sm" variant="outline" class="border-gray-300 hover:bg-gray-100">Отмена</Button>
+                    <Button
+                        @click="saveEdit"
+                        size="sm"
+                        class="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                        Сохранить
+                    </Button>
+                    <Button
+                        @click="cancelEdit"
+                        size="sm"
+                        variant="outline"
+                        class="border-gray-300 hover:bg-gray-100"
+                    >
+                        Отмена
+                    </Button>
                 </div>
             </div>
             <div v-else>
-                <p class="break-words">{{ message.content }}</p>
-                <div class="mt-1 flex items-center gap-1 text-xs text-gray-600">
-                    <span v-if="message.status === 'sent'">
+                <p class="break-words">{{ props.message.content }}</p>
+                <div v-if="props.message.sender_type === 'client'" class="mt-1 flex items-center gap-1 text-xs text-gray-600">
+                    <span v-if="props.message.status === 'sent'" class="flex items-center gap-1">
                         <Clock class="h-3 w-3" />
                         {{ statusText }}
                     </span>
-                    <span v-else-if="message.status === 'delivered'">
+                    <span v-else-if="props.message.status === 'delivered'" class="flex items-center gap-1">
                         <Check class="h-3 w-3" />
                         {{ statusText }}
                     </span>
-                    <span v-else-if="message.status === 'read'">
+                    <span v-else-if="props.message.status === 'read'" class="flex items-center gap-1">
                         <CheckCheck class="h-3 w-3" />
                         {{ statusText }}
                     </span>
-                    <span v-if="message.is_edited" class="italic"> (ред.)</span>
+                    <span v-if="props.message.is_edited" class="italic">(ред.)</span>
                 </div>
                 <Button
                     v-if="isOwnMessage && !isEditing"
@@ -93,31 +108,3 @@ const cancelEdit = () => {
         </div>
     </div>
 </template>
-
-<style scoped>
-.animate-slide-in {
-    animation: slideIn 0.3s ease-out;
-}
-@keyframes slideIn {
-    from {
-        transform: translateY(10px);
-        opacity: 0;
-    }
-    to {
-        transform: translateY(0);
-        opacity: 1;
-    }
-}
-
-.animate-fade-in {
-    animation: fadeIn 0.2s ease-out;
-}
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-</style>

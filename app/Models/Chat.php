@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Chat extends Model
 {
-    protected $fillable = ['client_id', 'operator_id', 'status'];
+    protected $fillable = ['client_id', 'operator_id', 'status', 'accepted_at', 'closed_at'];
 
     public function client(): BelongsTo
     {
