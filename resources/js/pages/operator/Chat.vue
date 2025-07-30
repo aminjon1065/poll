@@ -168,7 +168,7 @@ const pollMessages = async () => {
             window.location.href = route('dashboard');
         }
     } catch (error) {
-        console.error('Ошибка long-polling:', error);
+        console.log('Ошибка long-polling:', error);
     } finally {
         if (polling.value) {
             setTimeout(pollMessages, 2000);

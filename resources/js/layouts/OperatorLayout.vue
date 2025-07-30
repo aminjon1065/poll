@@ -51,7 +51,6 @@ const pollChats = async () => {
         chats.value = newChats;
         lastEventId.value = last_event_id;
     } catch (error: any) {
-        console.error('Ошибка при опросе чатов:', error);
         if (error.code === 'ECONNABORTED') {
             console.warn('Запрос pollChats');
         }
