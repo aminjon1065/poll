@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('clients', function (Blueprint $table) {
             $table->id();
-            $table->string('name')->nullable()->default('Anonymous');
+            $table->string('name')->nullable()->default('Анонимный');
             $table->string('session_id')->unique();
             $table->timestamps();
         });

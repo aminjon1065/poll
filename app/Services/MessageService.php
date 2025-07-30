@@ -6,21 +6,13 @@ use App\Models\Chat;
 use App\Models\Event;
 use App\Models\Message;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
+//сервис для работы с сообщениями(Тут по названиям методов понятно что для чего, мне и в правде не лень написать 😊)
 class MessageService
 {
-    public function sendMessage($chat_id, $sender_id, $sender_type, $content, $uuid = null)
+    public function sendMessage($chat_id, $sender_id, $sender_type, $content, $uuid = null): Message
     {
-        Log::info('sendMessage called', [
-            'chat_id' => $chat_id,
-            'sender_id' => $sender_id,
-            'sender_type' => $sender_type,
-            'content' => $content,
-            'uuid' => $uuid,
-        ]);
-
         $chat = Chat::findOrFail($chat_id);
         if ($chat->status !== 'active') {
             throw new \Exception('Чат не активен', 400);
@@ -32,29 +24,33 @@ class MessageService
 
         DB::beginTransaction();
         try {
-            $message = Message::firstOrCreate(
-                ['uuid' => $uuid],
-                [
-                    'chat_id' => $chat_id,
-                    'sender_id' => $sender_id,
-                    'sender_type' => $sender_type,
-                    'content' => $content,
-                    'status' => 'sent',
-                    'uuid' => $uuid ?? Str::uuid()->toString(),
-                    'retry_count' => 0,
-                ]
-            );
+            $existingMessage = $uuid ? Message::where('uuid', $uuid)
+                ->where('chat_id', $chat_id)
+                ->whereIn('status', ['delivered', 'read'])
+                ->first() : null;
 
-            if ($message->wasRecentlyCreated) {
-                Event::create([
-                    'chat_id' => $chat_id,
-                    'event_type' => 'message_sent',
-                    'sender_id' => $sender_id,
-                    'sender_type' => $sender_type,
-                    'data' => ['message_id' => $message->id],
-                    'uuid' => $uuid ?? Str::uuid()->toString(),
-                ]);
+            if ($existingMessage) {
+                return $existingMessage;
             }
+
+            $message = Message::create([
+                'chat_id' => $chat_id,
+                'sender_id' => $sender_id,
+                'sender_type' => $sender_type,
+                'content' => $content,
+                'status' => 'sent',
+                'uuid' => $uuid ?? Str::uuid()->toString(),
+                'retry_count' => 0,
+            ]);
+
+            Event::create([
+                'chat_id' => $chat_id,
+                'event_type' => 'message_sent',
+                'sender_id' => $sender_id,
+                'sender_type' => $sender_type,
+                'data' => ['message_id' => $message->id],
+                'uuid' => $message->uuid,
+            ]);
 
             DB::commit();
             return $message;
@@ -64,15 +60,8 @@ class MessageService
         }
     }
 
-    public function editMessage($message_id, $sender_id, $sender_type, $content)
+    public function editMessage($message_id, $sender_id, $sender_type, $content): Message
     {
-        Log::info('MessageService::editMessage called', [
-            'message_id' => $message_id,
-            'sender_id' => $sender_id,
-            'sender_type' => $sender_type,
-            'content' => $content,
-        ]);
-
         $message = Message::findOrFail($message_id);
         $chat = Chat::findOrFail($message->chat_id);
 
@@ -109,19 +98,12 @@ class MessageService
         }
     }
 
-    public function markMessageDelivered($message_id, $recipient_id, $recipient_type)
+    public function markMessageDelivered($message_id, $recipient_id, $recipient_type): Message
     {
-        Log::info('MessageService::markMessageDelivered called', [
-            'message_id' => $message_id,
-            'recipient_id' => $recipient_id,
-            'recipient_type' => $recipient_type,
-        ]);
-
         $message = Message::findOrFail($message_id);
         if ($message->status !== 'sent') {
             return $message;
         }
-
         $chat = Chat::findOrFail($message->chat_id);
         if (
             ($recipient_type === 'operator' && $chat->operator_id !== $recipient_id) ||

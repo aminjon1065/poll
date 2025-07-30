@@ -10,8 +10,8 @@ use App\Models\Message;
 use App\Services\MessageService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -24,13 +24,13 @@ class OperatorChatController extends Controller
         $this->messageService = $messageService;
     }
 
+    //Тут показываем дашборд оператора
     public function dashboard(): Response
     {
         $operator = Auth::guard('operator')->user();
         $chats = Chat::where('operator_id', $operator->id)
             ->where('status', 'active')
-            ->with('messages')
-            ->with('client')
+            ->with('messages', 'client')
             ->get();
 
         return Inertia::render('operator/Dashboard', [
@@ -39,68 +39,80 @@ class OperatorChatController extends Controller
         ]);
     }
 
+    //Тут связано с чатом, к примеру новые клиенты появятся в списке оператора
     public function pollChats(Request $request)
     {
+        set_time_limit(30);
+
         $operatorId = Auth::guard('operator')->id();
+        if (!$operatorId) {
+            return response()->json(['error' => 'Оператор не авторизован'], 403);
+        }
+
         $lastEventId = $request->query('last_event_id', 0);
-
-        $timeout = 30;
+        $timeout = 5;
         $startTime = time();
+        $maxIterations = 5;
 
-        while (time() - $startTime < $timeout) {
-            $events = Event::where('sender_id', $operatorId)
-                ->where('sender_type', 'operator')
-                ->where('id', '>', $lastEventId)
+        $cacheKey = "operator_chats_{$operatorId}";
+        $chats = Cache::remember($cacheKey, 10, function () use ($operatorId) {
+            return Chat::where('operator_id', $operatorId)
+                ->where('status', 'active')
+                ->with('client')
+                ->orderBy('created_at', 'desc')
+                ->get();
+        });
+        $iteration = 0;
+        while (time() - $startTime < $timeout && $iteration < $maxIterations) {
+            $events = Event::where('sender_type', 'operator')
+                ->where('sender_id', $operatorId)
                 ->where('event_type', 'chat_assigned')
+                ->where('id', '>', $lastEventId)
+                ->select('id', 'chat_id', 'event_type')
                 ->get();
 
             if ($events->isNotEmpty()) {
+                Cache::forget($cacheKey);
                 $chats = Chat::where('operator_id', $operatorId)
                     ->where('status', 'active')
-                    ->with('messages')
                     ->with('client')
+                    ->orderBy('created_at', 'desc')
                     ->get();
-
                 return response()->json([
                     'chats' => $chats,
                     'last_event_id' => $events->max('id'),
                 ], 200);
             }
 
-            usleep(500000);
+            usleep(1000000);
+            $iteration++;
         }
-
         return response()->json([
-            'chats' => [],
+            'chats' => $chats,
             'last_event_id' => $lastEventId,
         ], 200);
     }
 
+    //Тут показываем чат с сообзениями
     public function show($chat_id): Response
     {
         $chat = Chat::where('id', $chat_id)
             ->where('operator_id', Auth::guard('operator')->id())
-            ->with('messages')
-            ->with('client')
+            ->with('messages', 'client')
             ->firstOrFail();
         return Inertia::render('operator/Chat', [
             'chat' => $chat,
             'auth' => Auth::guard('operator')->user(),
             'chats' => Chat::where('operator_id', Auth::guard('operator')->id())
                 ->where('status', 'active')
-                ->with('messages')
-                ->with('client')
+                ->with('messages', 'client')
                 ->get(),
         ]);
     }
 
+    // Тут закрываем чат
     public function closeChat(Request $request, $chat_id)
     {
-        Log::info('OperatorChatController::closeChat called', [
-            'chat_id' => $chat_id,
-            'operator_id' => Auth::id(),
-        ]);
-
         $chat = Chat::findOrFail($chat_id);
         if ($chat->operator_id !== Auth::id()) {
             return response()->json(['error' => 'Нет доступа к этому чату'], 403);
@@ -124,18 +136,16 @@ class OperatorChatController extends Controller
                 'sender_type' => 'operator',
                 'data' => [],
             ]);
-
-            ProcessChatQueueJob::dispatch();
-
+            ProcessChatQueueJob::dispatchSync(); // Синхронный вызов
             DB::commit();
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Failed to close chat', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Не удалось закрыть чат'], 500);
         }
     }
 
+    //Тут отправляем сообщение
     public function sendMessage(Request $request, $chat_id)
     {
         $request->validate([
@@ -158,6 +168,7 @@ class OperatorChatController extends Controller
         }
     }
 
+    //Тут получаем всё что связано с сообщениями
     public function pollMessages(Request $request, $chat_id)
     {
         $chat = Chat::findOrFail($chat_id);
@@ -172,11 +183,21 @@ class OperatorChatController extends Controller
         while (time() - $startTime < $timeout) {
             $events = Event::where('chat_id', $chat_id)
                 ->where('id', '>', $lastEventId)
-                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited', 'chat_closed', 'client_name_updated'])
+                ->whereIn('event_type', [
+                    'message_sent',
+                    'typing_start',
+                    'typing_end',
+                    'message_delivered',
+                    'message_edited',
+                    'chat_closed',
+                    'client_name_updated',
+                ])
                 ->where('sender_type', 'client')
                 ->get();
 
-            $messageIds = $events->whereIn('event_type', ['message_sent', 'message_edited'])->pluck('data.message_id')->unique();
+            $messageIds = $events->whereIn('event_type', ['message_sent', 'message_edited'])
+                ->pluck('data.message_id')
+                ->unique();
             if ($messageIds->isNotEmpty()) {
                 foreach ($events->where('event_type', 'message_sent') as $event) {
                     $this->messageService->markMessageDelivered($event->data['message_id'], Auth::id(), 'operator');
@@ -222,14 +243,9 @@ class OperatorChatController extends Controller
         ], 200);
     }
 
+    //Тут отправляем что пишем
     public function sendTypingEvent(Request $request, $chat_id)
     {
-        Log::info('OperatorChatController::sendTypingEvent called', [
-            'chat_id' => $chat_id,
-            'operator_id' => Auth::id(),
-            'typing' => $request->input('typing'),
-        ]);
-
         $request->validate([
             'typing' => 'required|boolean',
         ]);
@@ -250,6 +266,7 @@ class OperatorChatController extends Controller
         return response()->json(['success' => true], 200);
     }
 
+    //Тут отправляем что прочитали сообщение
     public function markMessageAsRead(Request $request, $chat_id)
     {
         $request->validate([
@@ -288,15 +305,9 @@ class OperatorChatController extends Controller
         }
     }
 
+    //Тут редактируем сообщение
     public function editMessage(Request $request, $chat_id, $message_id)
     {
-        Log::info('OperatorChatController::editMessage called', [
-            'chat_id' => $chat_id,
-            'message_id' => $message_id,
-            'operator_id' => Auth::id(),
-            'content' => $request->input('content'),
-        ]);
-
         $request->validate([
             'content' => 'required|string|max:1000',
         ]);

@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     /**
      * Run the migrations.
      */
@@ -21,12 +20,15 @@ return new class extends Migration
                 'typing_start',
                 'typing_end',
                 'message_edited',
-                'chat_closed'
+                'chat_assigned',
+                'chat_closed',
+                'client_name_updated'
             ]);
             $table->unsignedBigInteger('sender_id');
             $table->enum('sender_type', ['client', 'operator']);
-            $table->json('data')->nullable(); // Для дополнительной информации, например, ID сообщения
+            $table->json('data')->nullable();
             $table->timestamps();
+            $table->index(['sender_id', 'sender_type', 'event_type']);
         });
     }
 

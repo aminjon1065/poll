@@ -11,6 +11,7 @@ use App\Models\Message;
 use App\Models\Operator;
 use App\Services\MessageService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +31,7 @@ class ClientChatController extends Controller
         $this->messageService = $messageService;
     }
 
+    //Тут мы ищем клиента из метода getOrCreateClient если найдём то перенаправляем в чат
     public function start(Request $request)
     {
         $client = $this->getOrCreateClient($request);
@@ -41,36 +43,44 @@ class ClientChatController extends Controller
         if (!$chat) {
             $chat = DB::transaction(function () use ($client) {
                 $operator = $this->findAvailableOperatorForUpdate();
-                return Chat::create([
+                $chat = Chat::create([
                     'client_id' => $client->id,
                     'operator_id' => $operator?->id,
                     'status' => $operator ? self::STATUS_ACTIVE : self::STATUS_PENDING,
                     'accepted_at' => $operator ? now() : null,
                 ]);
+
+                if (!$operator) {
+                    ProcessChatQueueJob::dispatch();
+                }
+
+                return $chat;
             });
         }
+
         $this->setClientSession($request, $client, $chat);
         return redirect()->route('chat.show', ['chat' => $chat->id]);
     }
 
+//Тут мы показываем сам чат
     public function show(Chat $chat, Request $request)
     {
-        $clientId = session('client_id') ?? $request->cookie('client_id');
+        $client = $this->getOrCreateClient($request);
 
-        abort_if(!$clientId || $chat->client_id !== (int)$clientId, 403, 'Unauth');
+        abort_if(!$client->id || $chat->client_id !== (int)$client->id, 403, 'Unauthorized');
 
-        $this->setClientSession($request, Client::find($clientId), $chat);
+        $this->setClientSession($request, Client::find($client->id), $chat);
 
         return Inertia::render('client/Chat', [
-            'chat' => $chat->load('messages'),
+            'chat' => $chat->load('messages', 'client', 'operator'),
         ]);
     }
 
+    //Тут мы ищем пользователя в сессиях и куки, если есть сессия и куки то ищем в БД, если не найдём то создаём нового
     private function getOrCreateClient(Request $request): Client
     {
         $clientId = session('client_id') ?? $request->cookie('client_id');
         $client = $clientId ? Client::find($clientId) : null;
-
         if (!$client) {
             $client = Client::create([
                 'name' => $request->input('name', 'Анонимный'),
@@ -81,31 +91,33 @@ class ClientChatController extends Controller
         return tap($client)->update(['last_active_at' => now()]);
     }
 
+
+    //Тут мы задаём клиенту сессию
     private function setClientSession(Request $request, Client $client, Chat $chat): void
     {
         $request->session()->put('client_id', $client->id);
         $request->session()->put('chat_id', $chat->id);
     }
 
+
+    //Тут мы ищем свободного оператора
     private function findAvailableOperatorForUpdate(): ?Operator
     {
-        return Operator::withCount([
-            'chats as active_chats_count' => fn($q) => $q->where('status', self::STATUS_ACTIVE),
-        ])
+        return Operator::select('operators.*')
+            ->addSelect([
+                'active_chats_count' => Chat::selectRaw('COUNT(*)')
+                    ->whereColumn('operator_id', 'operators.id')
+                    ->where('status', self::STATUS_ACTIVE),
+            ])
+            ->having('active_chats_count', '<', \DB::raw('operators.max_chats'))
             ->orderBy('active_chats_count')
             ->lockForUpdate()
-            ->get()
-            ->first(fn($operator) => $operator->active_chats_count < $operator->max_chats);
+            ->first();
     }
 
+    //Тут мы обновляем имя клиента
     public function updateName(Request $request, $chat_id)
     {
-        Log::info('ClientChatController::updateName called', [
-            'chat_id' => $chat_id,
-            'client_id' => session('client_id') ?? $request->cookie('client_id'),
-            'name' => $request->input('name'),
-        ]);
-
         $client = $this->getOrCreateClient($request);
         if (!$client->id) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
@@ -122,27 +134,26 @@ class ClientChatController extends Controller
 
         DB::beginTransaction();
         try {
-            $client = Client::findOrFail($client->id);
             $client->update(['name' => $request->input('name')]);
+            Event::create([
+                'chat_id' => $chat_id,
+                'event_type' => 'client_name_updated',
+                'sender_id' => $client->id,
+                'sender_type' => 'client',
+                'data' => ['name' => $request->input('name')],
+            ]);
             DB::commit();
             return response()->json(['success' => true, 'name' => $client->name]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Failed to update client name', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Не удалось обновить имя'], 500);
         }
     }
 
+    //Тут мы отправляем сообщение используем сервис messageService который объявили в конструкторе
     public function sendMessage(Request $request, $chat_id)
     {
-        Log::info('ClientChatController::sendMessage called', [
-            'chat_id' => $chat_id,
-            'client_id' => session('client_id') ?? $request->cookie('client_id'),
-            'content' => $request->input('content'),
-            'uuid' => $request->input('uuid'),
-        ]);
-
-        $clientId = session('client_id') ?? $request->cookie('client_id');
+        $clientId = $this->getOrCreateClient($request)->id;
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
         }
@@ -172,77 +183,104 @@ class ClientChatController extends Controller
         }
     }
 
+    //Тут мы получаем всё что связано с сообщениями чата (что-то по типу веб-сокета, в реально времени)
     public function pollMessages(Request $request, $chat_id)
     {
-        $clientId = session('client_id') ?? $request->cookie('client_id');
+        set_time_limit(30);
+        $clientId = $this->getOrCreateClient($request)->id;
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
         }
-
         $chat = Chat::findOrFail($chat_id);
         if ($chat->client_id !== (int)$clientId) {
             return response()->json(['error' => 'Нет доступа к этому чату'], 403);
         }
-
-        $timeout = 30;
+        $timeout = 5;
         $startTime = time();
         $lastEventId = $request->query('last_event_id', 0);
-
-        while (time() - $startTime < $timeout) {
+        $maxIterations = 5;
+        $cacheKey = "chat_messages_{$chat_id}";
+        $messages = Cache::remember($cacheKey, 10, function () use ($chat_id) {
+            return Message::where('chat_id', $chat_id)->get();
+        });
+        $iteration = 0;
+        while (time() - $startTime < $timeout && $iteration < $maxIterations) {
             $events = Event::where('chat_id', $chat_id)
                 ->where('id', '>', $lastEventId)
-                ->whereIn('event_type', ['message_sent', 'typing_start', 'typing_end', 'message_delivered', 'message_edited', 'chat_assigned', 'chat_closed'])
+                ->whereIn('event_type', [
+                    'message_sent',
+                    'typing_start',
+                    'typing_end',
+                    'message_delivered',
+                    'message_edited',
+                    'chat_assigned',
+                    'chat_closed',
+                ])
                 ->where('sender_type', 'operator')
+                ->select('id', 'event_type', 'sender_type', 'data')
                 ->get();
-
-            $messageIds = $events->whereIn('event_type', ['message_sent', 'message_edited'])->pluck('data.message_id')->unique();
+            $messageIds = $events->whereIn('event_type', ['message_sent', 'message_edited'])
+                ->pluck('data.message_id')
+                ->unique();
             if ($messageIds->isNotEmpty()) {
                 foreach ($events->where('event_type', 'message_sent') as $event) {
                     $this->messageService->markMessageDelivered($event->data['message_id'], $clientId, 'client');
                 }
             }
-
-            $messages = Message::where('chat_id', $chat_id)->get();
-            $typingEvents = $events->whereIn('event_type', ['typing_start', 'typing_end'])->map(function ($event) {
-                return [
-                    'event_type' => $event->event_type,
-                    'sender_type' => $event->sender_type,
-                ];
-            });
-
             if ($events->isNotEmpty()) {
+                Cache::forget($cacheKey);
+                $messages = Message::where('chat_id', $chat_id)->get();
+                $typingEvents = $events->whereIn('event_type', ['typing_start', 'typing_end'])->map(function ($event) {
+                    return [
+                        'event_type' => $event->event_type,
+                        'sender_type' => $event->sender_type,
+                    ];
+                });
                 return response()->json([
                     'messages' => $messages,
                     'typing_events' => $typingEvents,
+                    'events' => $events->map(function ($event) {
+                        return [
+                            'event_type' => $event->event_type,
+                            'sender_type' => $event->sender_type,
+                            'data' => $event->data,
+                        ];
+                    }),
                     'last_event_id' => $events->max('id'),
                     'chat_status' => $chat->refresh()->status,
+                    'queue_position' => $chat->status === 'pending' ? $this->getQueuePosition($chat) : null,
                 ], 200);
             }
-
-            usleep(500000);
+            usleep(1000000);
+            $iteration++;
         }
-
         return response()->json([
-            'messages' => [],
+            'messages' => $messages,
             'typing_events' => [],
+            'events' => [],
             'last_event_id' => $lastEventId,
             'chat_status' => $chat->status,
+            'queue_position' => $chat->status === 'pending' ? $this->getQueuePosition($chat) : null,
         ], 200);
     }
 
+    //Тут мы получаем позицию в очереди чата
+    private function getQueuePosition(Chat $chat): int
+    {
+        return Chat::where('status', 'pending')
+            ->where('created_at', '<=', $chat->created_at)
+            ->count();
+    }
+
+
+//Тут мы отправляем что пишем(оператору показывает что: клиент печатает...)
     public function sendTypingEvent(Request $request, $chat_id)
     {
-        Log::info('ClientChatController::sendTypingEvent called', [
-            'chat_id' => $chat_id,
-            'client_id' => session('client_id') ?? $request->cookie('client_id'),
-            'typing' => $request->input('typing'),
-        ]);
-
         $request->validate([
             'typing' => 'required|boolean',
         ]);
 
-        $clientId = session('client_id') ?? $request->cookie('client_id');
+        $clientId = $this->getOrCreateClient($request)->id;
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
         }
@@ -267,6 +305,7 @@ class ClientChatController extends Controller
         return response()->json(['success' => true]);
     }
 
+    //Тут мы получаем все сообщения чата
     public function getMessages($chat_id)
     {
         $chat = Chat::findOrFail($chat_id);
@@ -280,6 +319,7 @@ class ClientChatController extends Controller
         return response()->json($messages);
     }
 
+    //Тут мы помечаем сообщение как прочитанное
     public function markMessageAsRead(Request $request, $chat_id)
     {
         $request->validate([
@@ -287,7 +327,7 @@ class ClientChatController extends Controller
             'message_ids.*' => 'integer|exists:messages,id',
         ]);
 
-        $clientId = session('client_id') ?? $request->cookie('client_id');
+        $clientId = $this->getOrCreateClient($request)->id;
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
         }
@@ -323,15 +363,9 @@ class ClientChatController extends Controller
         }
     }
 
+    //Тут мы редактируем сообщение
     public function editMessage(Request $request, $chat_id, $message_id)
     {
-        Log::info('ClientChatController::editMessage called', [
-            'chat_id' => $chat_id,
-            'message_id' => $message_id,
-            'client_id' => session('client_id') ?? $request->cookie('client_id'),
-            'content' => $request->input('content'),
-        ]);
-
         $clientId = session('client_id') ?? $request->cookie('client_id');
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
@@ -355,13 +389,10 @@ class ClientChatController extends Controller
         }
     }
 
+    //Тут мы закрываем чат и вызываем ProcessChatQueueJob для определение новых клиентов операторам
+    // В ClientChatController.php
     public function closeChat(Request $request, $chat_id)
     {
-        Log::info('ClientChatController::closeChat called', [
-            'chat_id' => $chat_id,
-            'client_id' => session('client_id') ?? $request->cookie('client_id'),
-        ]);
-
         $clientId = session('client_id') ?? $request->cookie('client_id');
         if (!$clientId) {
             return response()->json(['error' => 'Клиент не авторизован'], 403);
@@ -382,7 +413,6 @@ class ClientChatController extends Controller
                 'status' => self::STATUS_CLOSED,
                 'closed_at' => now(),
             ]);
-
             Event::create([
                 'chat_id' => $chat_id,
                 'event_type' => 'chat_closed',
@@ -390,14 +420,11 @@ class ClientChatController extends Controller
                 'sender_type' => 'client',
                 'data' => [],
             ]);
-
-            ProcessChatQueueJob::dispatch();
-
+            ProcessChatQueueJob::dispatchSync();
             DB::commit();
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Failed to close chat', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Не удалось закрыть чат'], 500);
         }
     }

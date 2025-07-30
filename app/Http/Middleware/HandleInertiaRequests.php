@@ -48,11 +48,6 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
-            'chats' => Chat::where('operator_id', Auth::guard('operator')->id())
-                ->where('status', 'active')
-                ->with('client')
-                ->orderBy('created_at', 'desc')
-                ->get(),
             'ziggy' => [
                 ...(new Ziggy)->toArray(),
                 'location' => $request->url(),

@@ -17,50 +17,58 @@ class ProcessChatQueueJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3; // Повторные попытки при сбоях
-    public $timeout = 30; // Таймаут 30 секунд
-
-    public function __construct()
-    {
-        //
-    }
+    public $tries = 3;
+    public $timeout = 30;
 
     public function handle()
     {
-        Log::info('ProcessChatQueueJob started');
 
         $pendingChats = Chat::where('status', 'pending')
+            ->orderBy('created_at')
             ->lockForUpdate()
             ->get();
 
-        foreach ($pendingChats as $chat) {
-            $operator = Operator::withCount([
-                'chats as active_chats_count' => fn($q) => $q->where('status', 'active'),
-            ])
-                ->orderBy('active_chats_count')
-                ->lockForUpdate()
-                ->get()
-                ->first(fn($operator) => $operator->active_chats_count < $operator->max_chats);
-
-            if ($operator) {
-                DB::transaction(function () use ($chat, $operator) {
-                    $chat->update([
-                        'operator_id' => $operator->id,
-                        'status' => 'active',
-                        'accepted_at' => now(),
-                    ]);
-
-                    Event::create([
-                        'chat_id' => $chat->id,
-                        'event_type' => 'chat_assigned',
-                        'sender_id' => $operator->id,
-                        'sender_type' => 'operator',
-                        'data' => [],
-                    ]);
-                });
-            }
+        if ($pendingChats->isEmpty()) {
+            return;
         }
 
-        Log::info('Chat queue processed', ['pending_chats' => $pendingChats->count()]);
+        foreach ($pendingChats as $chat) {
+            $operator = Operator::select('operators.*')
+                ->addSelect([
+                    'active_chats_count' => Chat::selectRaw('COUNT(*)')
+                        ->whereColumn('operator_id', 'operators.id')
+                        ->where('status', 'active'),
+                ])
+                ->having('active_chats_count', '<', \DB::raw('operators.max_chats'))
+                ->orderBy('active_chats_count')
+                ->lockForUpdate()
+                ->first();
+
+            if ($operator) {
+                try {
+                    DB::transaction(function () use ($chat, $operator) {
+                        $chat->update([
+                            'operator_id' => $operator->id,
+                            'status' => 'active',
+                            'accepted_at' => now(),
+                        ]);
+
+                        Event::create([
+                            'chat_id' => $chat->id,
+                            'event_type' => 'chat_assigned',
+                            'sender_id' => $operator->id,
+                            'sender_type' => 'operator',
+                            'data' => [],
+                        ]);
+                    });
+                } catch (\Exception $e) {
+                    continue;
+                }
+            } else {
+                Log::debug('Нет доступных операторов', [
+                    'chat_id' => $chat->id,
+                ]);
+            }
+        }
     }
 }

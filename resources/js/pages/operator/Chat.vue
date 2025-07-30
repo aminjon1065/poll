@@ -1,11 +1,10 @@
+<!--Чат оператора-->
 <script setup lang="ts">
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import OperatorLayout from '@/layouts/OperatorLayout.vue';
 import axios from '@/lib/axios';
-import { cn } from '@/lib/utils';
 import type { Chat, Message } from '@/types';
-import { Link } from '@inertiajs/vue3';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Check, CheckCheck, Clock, Send, X } from 'lucide-vue-next';
@@ -17,7 +16,6 @@ const props = defineProps<{
     chats: Chat[];
     auth: { user: { id: number; name: string } };
 }>();
-
 const messages = ref<Message[]>(props.chat.messages || []);
 const messageInput = ref('');
 const lastEventId = ref(0);
@@ -35,12 +33,11 @@ const closeChat = async () => {
         window.location.href = route('dashboard');
     } catch (error: any) {
         console.error('Ошибка закрытия чата:', error);
-        alert(error.response?.data?.error || 'Не удалось закрыть чат');
     }
 };
 
 const sendMessage = async (content: string, uuid: string | null = null) => {
-    if (!messageInput.value.trim() || isClosed.value) return;
+    if (!content.trim() || isClosed.value) return;
 
     const messageUuid = uuid ?? uuidv4();
     try {
@@ -60,7 +57,6 @@ const sendMessage = async (content: string, uuid: string | null = null) => {
         sendTypingEvent(false);
     } catch (error: any) {
         console.error('Ошибка отправки сообщения:', error);
-        alert(error.response?.data?.error || 'Не удалось отправить сообщение');
     }
 };
 
@@ -79,7 +75,7 @@ const startEditing = (message: Message) => {
 };
 
 const saveEdit = async (messageId: number, content: string) => {
-    if (!editedContent.value.trim() || !editingMessageId.value || isClosed.value) return;
+    if (!content.trim() || !editingMessageId.value || isClosed.value) return;
 
     try {
         const response = await axios.put(
@@ -87,9 +83,7 @@ const saveEdit = async (messageId: number, content: string) => {
                 chat_id: props.chat.id,
                 message_id: messageId,
             }),
-            {
-                content: content,
-            },
+            { content },
         );
         const updatedMessage = response.data.message;
         const index = messages.value.findIndex((msg) => msg.id === editingMessageId.value);
@@ -100,7 +94,6 @@ const saveEdit = async (messageId: number, content: string) => {
         editedContent.value = '';
     } catch (error: any) {
         console.error('Ошибка редактирования сообщения:', error);
-        alert(error.response?.data?.error || 'Не удалось отредактировать сообщение');
     }
 };
 
@@ -113,6 +106,7 @@ const sendTypingEvent = async (typing: boolean) => {
     if (isClosed.value) return;
     try {
         await axios.post(route('operator.chat.typing', props.chat.id), { typing });
+        console.log(`Sent typing event: ${typing ? 'typing_start' : 'typing_end'}`); // Логирование
     } catch (error) {
         console.error('Ошибка отправки события печатает:', error);
     }
@@ -150,10 +144,11 @@ const pollMessages = async () => {
     try {
         const response = await axios.get(route('operator.chat.poll', props.chat.id), {
             params: { last_event_id: lastEventId.value },
+            timeout: 10000,
         });
         const { messages: newMessages, typing_events, last_event_id, chat_status, chat_closed } = response.data;
         if (newMessages.length) {
-            messages.value = newMessages;
+            messages.value = newMessages.filter((msg: Message) => msg && msg.id && msg.content);
             newMessages.forEach((msg: Message) => {
                 if (msg.status !== 'sent' && pendingMessages.value[msg.uuid]) {
                     clearTimeout(pendingMessages.value[msg.uuid].timeout);
@@ -165,6 +160,8 @@ const pollMessages = async () => {
         if (typing_events.length) {
             const latestTypingEvent = typing_events[typing_events.length - 1];
             isTyping.value = latestTypingEvent.event_type === 'typing_start';
+        } else {
+            isTyping.value = false;
         }
         isClosed.value = chat_status === 'closed';
         lastEventId.value = last_event_id;
@@ -175,7 +172,7 @@ const pollMessages = async () => {
         console.error('Ошибка long-polling:', error);
     } finally {
         if (polling.value) {
-            setTimeout(pollMessages, 100);
+            setTimeout(pollMessages, 2000);
         }
     }
 };
@@ -222,35 +219,35 @@ onUnmounted(() => {
                         <div :class="[message.sender_type === 'operator' ? 'flex justify-end' : 'flex justify-start', 'group mb-2']">
                             <div
                                 :class="[
-                                    message.sender_type === 'operator' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800',
+                                    message.sender_type === 'operator'
+                                        ? 'bg-neutral-500 text-white'
+                                        : 'bg-gray-200 text-gray-800 dark:bg-gray-600 dark:text-gray-200',
                                     'max-w-[70%] rounded-lg p-3 shadow-sm',
                                     message.status === 'sent' ? 'opacity-70' : '',
                                 ]"
                             >
                                 <div v-if="editingMessageId === message.id && message.sender_type === 'operator'" class="animate-fade-in space-y-2">
-                                    <input
-                                        v-model="editedContent"
-                                        type="text"
-                                        class="w-full rounded-md border border-gray-300 p-2 text-gray-800 focus:border-blue-500 focus:ring-blue-500"
-                                        @keydown.enter.prevent="saveEdit(message.id, editedContent)"
-                                    />
+                                    <Input v-model="editedContent" type="text" @keydown.enter.prevent="saveEdit(message.id, editedContent)" />
                                     <div class="flex gap-2">
-                                        <button
-                                            @click="saveEdit(message.id, editedContent)"
-                                            class="rounded-md bg-blue-600 px-3 py-1 text-sm text-white transition-colors hover:bg-blue-700"
-                                        >
-                                            Сохранить
-                                        </button>
-                                        <button
-                                            @click="cancelEdit"
-                                            class="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-800 transition-colors hover:bg-gray-100"
-                                        >
-                                            Отмена
-                                        </button>
+                                        <Button @click="saveEdit(message.id, editedContent)">
+                                            <Check />
+                                        </Button>
+                                        <Button @click="cancelEdit" variant="destructive">
+                                            <X />
+                                        </Button>
                                     </div>
                                 </div>
                                 <div v-else>
                                     <p class="break-words">{{ message.content }}</p>
+                                    <span class="text-xs" v-if="message.sender_type === 'client'">
+                                        {{
+                                            formatDistanceToNow(new Date(message.created_at), {
+                                                addSuffix: true,
+                                                locale: ru,
+                                            })
+                                        }}
+                                        <span v-if="message.is_edited" class="italic"> (ред.)</span>
+                                    </span>
                                     <div class="mt-1 flex items-center gap-1 text-xs opacity-80" v-if="message.sender_type === 'operator'">
                                         <span v-if="message.status === 'sent'">
                                             <Clock class="h-3 w-3" />
@@ -259,7 +256,7 @@ onUnmounted(() => {
                                             <Check class="h-3 w-3" />
                                         </span>
                                         <span v-else-if="message.status === 'read'">
-                                            <CheckCheck class="h-3 w-3" />
+                                            <CheckCheck class="h-3 w-3 text-blue-600" />
                                         </span>
                                         <span>
                                             {{

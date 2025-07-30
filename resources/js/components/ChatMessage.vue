@@ -91,7 +91,7 @@ const cancelEdit = () => {
                         {{ statusText }}
                     </span>
                     <span v-else-if="props.message.status === 'read'" class="flex items-center gap-1">
-                        <CheckCheck class="h-3 w-3" />
+                        <CheckCheck class="h-3 w-3 text-blue-600" />
                         {{ statusText }}
                     </span>
                     <span v-if="props.message.is_edited" class="italic">(ред.)</span>

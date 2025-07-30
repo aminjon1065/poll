@@ -17,7 +17,7 @@ return new class extends Migration {
             $table->unsignedBigInteger('sender_id');
             $table->enum('sender_type', ['client', 'operator']);
             $table->text('content');
-            $table->enum('status', ['sent', 'delivered', 'read'])->default('sent');
+            $table->enum('status', ['sent', 'delivered', 'read', 'replaced', 'failed'])->default('sent');
             $table->unsignedTinyInteger('retry_count')->default(0);
             $table->boolean('is_edited')->default(false);
             $table->timestamp('edited_at')->nullable();

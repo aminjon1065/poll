@@ -19,6 +19,7 @@ return new class extends Migration
             $table->timestamp('accepted_at')->nullable();
             $table->timestamp('closed_at')->nullable();
             $table->timestamps();
+            $table->index(['operator_id', 'status']);
         });
     }
 
